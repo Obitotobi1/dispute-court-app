@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DisputeCourt | On-chain dispute resolution on GenLayer</title>
+<meta name="description" content="Open a dispute, get an LLM verdict agreed by GenLayer validators, appeal once, and build an on-chain win/loss record.">
+<style>
+:root{--bg:#0b0b0e;--card:#14141a;--line:#2a2a34;--fg:#f1f1f4;--mute:#9a9aa8;--acc:#a78bfa;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}
+@media (prefers-color-scheme: light){:root{--bg:#f6f6f9;--card:#fff;--line:#dcdce6;--fg:#15151c;--mute:#5d5d6d;--acc:#6d4fe0;--ok:#16a34a;--warn:#b45309;--bad:#dc2626}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:8px}
+h1{font-size:26px;margin:0}
+h2{font-size:17px;margin:0 0 12px}
+.sub{color:var(--mute);margin:4px 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:12px;color:var(--mute);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.04em}
+input,textarea,select{width:100%;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit}
+textarea{min-height:84px;resize:vertical}
+button{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.grow{flex:1 1 220px}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;word-break:break-all}
+.mute{color:var(--mute)}
+.chip{display:inline-block;padding:2px 10px;border-radius:99px;border:1px solid var(--line);font-size:12px;font-weight:600}
+.chip.OPEN{color:var(--warn)}.chip.RESPONDED{color:var(--acc)}.chip.JUDGED{color:var(--ok)}.chip.FINAL{color:var(--fg);border-color:var(--acc)}
+.steps{display:flex;gap:6px;margin:10px 0 14px;flex-wrap:wrap}
+.step{flex:1 1 90px;text-align:center;padding:6px;border:1px solid var(--line);border-radius:8px;font-size:12px;color:var(--mute)}
+.step.on{border-color:var(--acc);color:var(--fg);font-weight:700}
+.case{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.case.sel{border-color:var(--acc)}
+.verdict{font-size:20px;font-weight:800}
+.tx{border-left:3px solid var(--acc);padding:6px 12px;margin:8px 0;background:rgba(167,139,250,.07);border-radius:0 8px 8px 0}
+.err{color:var(--bad)}
+.claim{white-space:pre-wrap;border:1px solid var(--line);border-radius:10px;padding:10px;margin:6px 0}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.tabs button{background:transparent;border:1px solid var(--line);color:var(--fg)}
+.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+small{color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>⚖️ DisputeCourt</h1>
+    <div class="chip" id="netchip">GenLayer Studio network</div>
+  </header>
+  <p class="sub">Slow. Expensive. Wrong. Open a dispute, let GenLayer validators agree on a verdict, appeal once with new evidence, and build an on-chain win/loss record.</p>
+
+  <div class="card" id="boot">Loading GenLayer SDK…</div>
+
+  <div id="app" hidden>
+    <div class="card">
+      <h2>1. Contract and identity</h2>
+      <label>DisputeCourt contract address</label>
+      <input id="contract" spellcheck="false">
+      <div class="row" style="margin-top:12px">
+        <div class="grow">
+          <label>Acting as</label>
+          <select id="who">
+            <option value="A">Account A (claimant)</option>
+            <option value="B">Account B (respondent)</option>
+          </select>
+        </div>
+        <button class="ghost" id="newkeys">Reset demo accounts</button>
+      </div>
+      <p class="mono" style="margin:10px 0 0">A: <span id="addrA"></span></p>
+      <p class="mono" style="margin:2px 0 0">B: <span id="addrB"></span></p>
+      <small>Demo accounts are generated in your browser and kept in local storage. They are free to use on Studio. Open a case from A naming B as respondent, then switch to B to respond. To test with someone else, share your address and have them open the app too.</small>
+    </div>
+
+    <div class="tabs">
+      <button class="on" data-tab="cases">Cases</button>
+      <button data-tab="new">Open a case</button>
+      <button data-tab="record">Win/loss record</button>
+    </div>
+
+    <div id="tab-new" hidden>
+      <div class="card">
+        <h2>Open a case</h2>
+        <label>Title (max 100)</label><input id="f_title" maxlength="100" placeholder="Late delivery refund">
+        <label>Your claim (max 500)</label><textarea id="f_claim" maxlength="500" placeholder="State your side with reasons."></textarea>
+        <label>Respondent address</label>
+        <div class="row"><input class="grow" id="f_resp" spellcheck="false" placeholder="0x…"><button class="ghost" id="useB">Use account B</button></div>
+        <label>Rubric (optional, max 300)</label><input id="f_rubric" maxlength="300" placeholder="Decide which side has the stronger, more reasonable argument.">
+        <div class="row" style="margin-top:14px"><button id="openBtn">Open case</button></div>
+      </div>
+    </div>
+
+    <div id="tab-cases">
+      <div class="card">
+        <div class="row"><h2 style="margin:0" class="grow">Cases</h2><button class="ghost" id="reload">Reload</button></div>
+        <div id="cases" class="mute" style="margin-top:12px">No cases loaded yet.</div>
+      </div>
+      <div class="card" id="detail" hidden></div>
+    </div>
+
+    <div id="tab-record" hidden>
+      <div class="card">
+        <h2>Win/loss record</h2>
+        <label>Address</label>
+        <div class="row"><input class="grow" id="r_addr" spellcheck="false" placeholder="0x…"><button id="r_btn">Look up</button></div>
+        <p id="r_out" style="margin-top:14px" class="mute"></p>
+        <small>Final SIDE_A or SIDE_B verdicts add a win for the winner and a loss for the loser. SPLIT changes nothing. Other contracts can read the same data with <span class="mono">get_record</span>.</small>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Transaction log</h2>
+      <div id="txlog" class="mute">Nothing sent yet.</div>
+    </div>
+  </div>
+  <p class="mute" style="text-align:center"><small>Built on GenLayer Intelligent Contracts · <a style="color:var(--acc)" href="https://github.com/Obitotobi1/dispute-judge">source on GitHub</a></small></p>
+</div>
+
+<script type="module">
+const DEFAULT_CONTRACT = "0x8587f4fFa73A55bcb679f913aD478B1AfC724Ec1";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const store = {
+  get(k){ try { return localStorage.getItem(k); } catch { return null; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch {} }
+};
+
+async function loadSdk() {
+  const bases = ["https://esm.sh/", "https://cdn.jsdelivr.net/npm/"];
+  const tries = [
+    async () => [await import("https://esm.sh/genlayer-js"), await import("https://esm.sh/genlayer-js/chains")],
+    async () => [await import("https://cdn.jsdelivr.net/npm/genlayer-js/+esm"), await import("https://cdn.jsdelivr.net/npm/genlayer-js/chains/+esm")],
+  ];
+  let last;
+  for (const t of tries) { try { return await t(); } catch (e) { last = e; } }
+  throw last;
+}
+
+let sdk, chains, client, accounts = {}, current = "A", selected = null;
+
+function keyFor(slot) {
+  let k = store.get("dc_key_" + slot);
+  if (!k) { k = sdk.generatePrivateKey(); store.set("dc_key_" + slot, k); }
+  return k;
+}
+function makeClient() {
+  const acct = accounts[current];
+  client = sdk.createClient({ chain: chains.studionet, account: acct });
+}
+function addr() { return $("contract").value.trim(); }
+
+function logTx(id, html, cls = "") {
+  const log = $("txlog");
+  if (log.classList.contains("mute")) { log.classList.remove("mute"); log.innerHTML = ""; }
+  let el = document.getElementById("tx_" + id);
+  if (!el) { el = document.createElement("div"); el.id = "tx_" + id; el.className = "tx"; log.prepend(el); }
+  el.className = "tx " + cls;
+  el.innerHTML = html;
+}
+
+// Full lifecycle: sign -> submitted -> consensus (ACCEPTED) -> FINALIZED, with refresh.
+async function send(label, functionName, args) {
+  const id = Date.now() + Math.random().toString(16).slice(2, 6);
+  try {
+    logTx(id, `<b>${esc(label)}</b><br>1/3 Signing and submitting…`);
+    const hash = await client.writeContract({ address: addr(), functionName, args, value: 0n });
+    const base = `<b>${esc(label)}</b><br><span class="mono">${esc(hash)}</span><br>`;
+    logTx(id, base + "2/3 Submitted. Waiting for validators to reach consensus…");
+    await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 120, interval: 3000 });
+    logTx(id, base + "3/3 <b style='color:var(--ok)'>Accepted by consensus.</b> Waiting for finality…");
+    await refresh();
+    client.waitForTransactionReceipt({ hash, status: "FINALIZED", retries: 200, interval: 5000 })
+      .then(() => logTx(id, base + "<b style='color:var(--ok)'>Finalized.</b>"))
+      .catch(() => logTx(id, base + "Accepted. Finality is still pending (this can take a while on testnets)."));
+  } catch (e) {
+    logTx(id, `<b>${esc(label)}</b><br><span class="err">Failed: ${esc(e?.shortMessage || e?.message || e)}</span>`, "err");
+  }
+}
+
+async function readJson(fn, args) {
+  const raw = await client.readContract({ address: addr(), functionName: fn, args });
+  return JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw));
+}
+
+async function refresh() {
+  const box = $("cases");
+  box.innerHTML = "Loading…";
+  const found = [];
+  for (let i = 1; i <= 40; i++) {
+    try { const c = await readJson("get_case", [i]); found.push([i, c]); } catch { break; }
+  }
+  if (!found.length) { box.innerHTML = "No cases yet. Open the first one."; $("detail").hidden = true; return; }
+  box.innerHTML = found.map(([i, c]) => `
+    <div class="case ${selected === i ? "sel" : ""}" data-id="${i}" style="cursor:pointer">
+      <div class="row"><b class="grow">#${i} · ${esc(c.title)}</b><span class="chip ${esc(c.status)}">${esc(c.status)}</span></div>
+      ${c.verdict ? `<small>Verdict: ${esc(c.verdict)} (confidence ${esc(c.confidence)})</small>` : `<small>No verdict yet</small>`}
+    </div>`).join("");
+  box.querySelectorAll(".case").forEach((el) => el.onclick = () => { selected = Number(el.dataset.id); refresh(); });
+  if (selected) { const hit = found.find(([i]) => i === selected); if (hit) renderDetail(hit[0], hit[1]); }
+}
+
+function renderDetail(id, c) {
+  const me = accounts[current].address.toLowerCase();
+  const isResp = me === String(c.respondent).toLowerCase();
+  const isParty = isResp || me === String(c.claimant).toLowerCase();
+  const order = ["OPEN", "RESPONDED", "JUDGED", "FINAL"];
+  const d = $("detail"); d.hidden = false;
+  d.innerHTML = `
+    <h2>Case #${id}: ${esc(c.title)}</h2>
+    <div class="steps">${order.map((s) => `<div class="step ${order.indexOf(c.status) >= order.indexOf(s) ? "on" : ""}">${s}</div>`).join("")}</div>
+    <small>Claimant</small><div class="mono">${esc(c.claimant)}</div>
+    <small>Respondent</small><div class="mono">${esc(c.respondent)}</div>
+    <small>Rubric</small><div>${esc(c.rubric)}</div>
+    <label>Side A claim</label><div class="claim">${esc(c.claim_a)}</div>
+    <label>Side B claim</label><div class="claim">${c.claim_b ? esc(c.claim_b) : "<span class='mute'>Waiting for the respondent.</span>"}</div>
+    ${c.appeal_evidence ? `<label>Appeal evidence</label><div class="claim">${esc(c.appeal_evidence)}</div>` : ""}
+    ${c.verdict ? `<label>Verdict</label><div class="verdict">${esc(c.verdict)} <small>confidence ${esc(c.confidence)}/5${c.appeals ? " · after appeal" : ""}</small></div><div>${esc(c.reason)}</div>` : ""}
+    <div id="actions" style="margin-top:16px"></div>`;
+  const a = $("actions");
+  if (c.status === "OPEN") {
+    a.innerHTML = isResp
+      ? `<label>Your response (Side B, max 500)</label><textarea id="a_text" maxlength="500"></textarea><div class="row" style="margin-top:10px"><button id="a_go">Submit response</button></div>`
+      : `<p class="mute">Only the named respondent can respond. Switch "Acting as" to the respondent account.</p>`;
+    if (isResp) $("a_go").onclick = () => send(`Respond to case #${id}`, "respond", [id, $("a_text").value]).then(refresh);
+  } else if (c.status === "RESPONDED") {
+    a.innerHTML = `<button id="a_go">Ask validators to judge</button> <small>Runs the LLM on every validator; this can take a minute or two.</small>`;
+    $("a_go").onclick = () => send(`Judge case #${id}`, "judge", [id]).then(refresh);
+  } else if (c.status === "JUDGED") {
+    a.innerHTML = `
+      <div class="row"><button id="a_fin">Accept verdict (finalize)</button></div>
+      ${isParty && !c.appeals ? `<label>Appeal with new evidence (one appeal only, max 500)</label><textarea id="a_text" maxlength="500"></textarea><div class="row" style="margin-top:10px"><button class="ghost" id="a_app">Appeal</button></div>` : `<p class="mute">${c.appeals ? "Appeal already used." : "Only the two parties can appeal."}</p>`}`;
+    $("a_fin").onclick = () => send(`Finalize case #${id}`, "finalize", [id]).then(refresh);
+    if ($("a_app")) $("a_app").onclick = () => send(`Appeal case #${id}`, "appeal", [id, $("a_text").value]).then(refresh);
+  } else {
+    a.innerHTML = `<p class="mute">This case is final. The win/loss record has been updated.</p>`;
+  }
+}
+
+function bind() {
+  document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+    for (const t of ["cases", "new", "record"]) $("tab-" + t).hidden = t !== b.dataset.tab;
+  });
+  $("contract").value = store.get("dc_contract_v3") || DEFAULT_CONTRACT;
+  $("contract").onchange = () => { store.set("dc_contract_v3", addr()); selected = null; refresh(); };
+  $("who").onchange = () => { current = $("who").value; makeClient(); refresh(); };
+  $("reload").onclick = refresh;
+  $("useB").onclick = () => { $("f_resp").value = accounts.B.address; };
+  $("newkeys").onclick = () => { if (confirm("Generate new demo accounts? The old ones are lost.")) { store.set("dc_key_A", ""); store.set("dc_key_B", ""); location.reload(); } };
+  $("openBtn").onclick = async () => {
+    const t = $("f_title").value.trim(), c = $("f_claim").value.trim(), r = $("f_resp").value.trim();
+    if (!t || !c || !/^0x[0-9a-fA-F]{40}$/.test(r)) { alert("Fill in a title, a claim and a valid respondent address."); return; }
+    await send("Open case", "open_case", [t, c, r, $("f_rubric").value.trim()]);
+    document.querySelector('[data-tab="cases"]').click();
+  };
+  $("r_btn").onclick = async () => {
+    const a = $("r_addr").value.trim();
+    if (!a) return;
+    $("r_out").textContent = "Loading…";
+    try { const r = await readJson("get_record", [a]); $("r_out").innerHTML = `<b>${esc(r.wins)}</b> wins · <b>${esc(r.losses)}</b> losses`; $("r_out").classList.remove("mute"); }
+    catch (e) { $("r_out").innerHTML = `<span class="err">${esc(e?.message || e)}</span>`; }
+  };
+}
+
+(async () => {
+  try {
+    const [a, b] = await loadSdk();
+    sdk = a; chains = b;
+    for (const s of ["A", "B"]) accounts[s] = sdk.createAccount(keyFor(s));
+    $("addrA").textContent = accounts.A.address;
+    $("addrB").textContent = accounts.B.address;
+    makeClient(); bind();
+    $("r_addr").value = accounts.A.address;
+    $("boot").hidden = true; $("app").hidden = false;
+    refresh();
+  } catch (e) {
+    $("boot").innerHTML = `<span class="err">Could not load the GenLayer SDK: ${esc(e?.message || e)}</span><br><small>Check your connection and reload.</small>`;
+  }
+})();
+</script>
+</body>
+</html>
