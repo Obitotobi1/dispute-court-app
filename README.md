@@ -1,79 +1,37 @@
-# DisputeCourt
+# DisputeCourt App
 
-A multi-stage dispute resolution Intelligent Contract for GenLayer. Two parties argue a case on-chain, validators reach consensus on an AI-generated verdict, either party can appeal once with new evidence, and final outcomes build a per-address win/loss record that other contracts can read.
+A web app for **DisputeCourt**, a GenLayer Intelligent Contract that resolves two-party disputes with validator consensus.
 
-- **Deployed (GenLayer Studio):** `0x8587f4fFa73A55bcb679f913aD478B1AfC724Ec1`
-- **Contract:** [`dispute_court.py`](./dispute_court.py)
+Justice is slow, expensive and wrong. AI agents will soon make millions of deals that no court can keep up with. DisputeCourt gives them (and people) a cheap, neutral way to settle a disagreement and build a public track record.
 
-## Lifecycle
+- **Contract:** `0x8587f4fFa73A55bcb679f913aD478B1AfC724Ec1` (GenLayer Studio)
+- **Contract source and tests:** https://github.com/Obitotobi1/dispute-judge
 
-```
-OPEN --respond--> RESPONDED --judge--> JUDGED --finalize--> FINAL
-                                          |
-                                          +--appeal (once)--> FINAL
-```
+## What the app does
 
-| Method | Who | Effect |
-|---|---|---|
-| `open_case(title, claim_a, respondent, rubric)` | anyone (becomes claimant) | creates a case in `OPEN` |
-| `respond(case_id, claim_b)` | named respondent only | stores Side B, moves to `RESPONDED` |
-| `judge(case_id)` | anyone | runs LLM consensus, moves to `JUDGED` |
-| `appeal(case_id, new_evidence)` | claimant or respondent, once | re-judges using the prior verdict plus new evidence, moves to `FINAL` |
-| `finalize(case_id)` | anyone | closes a `JUDGED` case without appeal, moves to `FINAL` |
+1. **Open a case.** The claimant writes a title, a claim and an optional rubric, and names a respondent.
+2. **Respond.** Only the named respondent can submit Side B.
+3. **Judge.** Validators each run an LLM and must agree on a structured verdict (`SIDE_A`, `SIDE_B` or `SPLIT`, plus confidence 1-5) using `gl.eq_principle.prompt_comparative`.
+4. **Appeal once** with new evidence, or **finalize**.
+5. **Record.** Final verdicts update per-address win/loss counts that anyone (or any contract) can read.
 
-State guards reject out-of-order calls. Role checks restrict who can respond and appeal.
+Every write shows the full transaction lifecycle: signed, submitted, accepted by consensus, finalized.
 
-## Consensus design
+## Try it alone in two minutes
 
-Each judgment returns structured JSON:
+The app generates two demo accounts in your browser (no wallet, free on Studio).
 
-```json
-{"verdict": "SIDE_A | SIDE_B | SPLIT", "confidence": 1-5, "reason": "one sentence"}
-```
+1. Open the app and click **Open a case**. Click **Use account B** for the respondent, fill in a claim, and send.
+2. Switch **Acting as** to **Account B**, open the case, and submit a response.
+3. Click **Ask validators to judge** and wait for consensus.
+4. Appeal with new evidence or finalize. Then check **Win/loss record**.
 
-Validators use `gl.eq_principle.prompt_comparative` with this rule:
+## Run locally
 
-- `verdict` must be identical
-- `confidence` may differ by at most 1
-- `reason` wording is free
+It is a single static file. Open `index.html` through any static server, for example `python3 -m http.server`, then visit `http://localhost:8000`.
 
-Safety behaviours:
+## Notes
 
-- Claims, rubric and appeal text are treated as evidence only, so instructions hidden inside them are ignored (prompt-injection guard).
-- Invalid or unparseable model output is normalized to `SPLIT` with confidence 1.
-- On appeal the model sees the prior verdict and is told to change it only if the new evidence is material.
-
-## Reputation records
-
-When a case reaches `FINAL` with `SIDE_A` or `SIDE_B`, the winning address gets +1 win and the losing address +1 loss. `SPLIT` changes nothing. Addresses are stored lowercase.
-
-## Composable read API
-
-Other contracts can read results without running a judgment:
-
-- `get_case(case_id)` returns the full case record as JSON
-- `get_verdict(case_id)` returns `{status, verdict, confidence}`
-- `get_record(address)` returns `{wins, losses}`
-
-## Tested in GenLayer Studio
-
-| Step | Result |
-|---|---|
-| `open_case` -> `respond` -> `judge` | status `JUDGED`, verdict `SIDE_B`, confidence 3 |
-| `appeal` with new evidence | status `FINAL`, verdict flipped to `SIDE_A`, confidence 5 |
-| `get_record` after fixing address casing | `wins: 1, losses: 1` |
-| `open_case` -> `respond` -> `judge` -> `finalize` (no appeal) | status `FINAL`, verdict `SIDE_B`, confidence 4 |
-
-## Limits
-
-- One appeal per case.
-- Claim and evidence text capped at 500 characters, title at 100, rubric at 300.
-- Verdict quality depends on the LLM; `SPLIT` is the fallback when output is invalid.
-- No stake, payment or enforcement logic. This is a verdict and reputation primitive.
-
-## Run it
-
-1. Open GenLayer Studio and create a new contract file.
-2. Paste `dispute_court.py` and deploy (constructor takes no arguments).
-3. Call `open_case`, then `respond`, `judge`, and `finalize` or `appeal`.
-4. Read results with `get_verdict`, `get_case` and `get_record`.
+- The SDK (`genlayer-js`) is loaded from a CDN at runtime.
+- Demo keys are stored in your browser's local storage and are only for the Studio test network. Do not reuse them anywhere valuable.
+- Case text is escaped before display.
