@@ -118,7 +118,7 @@ small{color:var(--mute)}
 </div>
 
 <script type="module">
-const DEFAULT_CONTRACT = "0x8587f4fFa73A55bcb679f913aD478B1AfC724Ec1";
+const DEFAULT_CONTRACT = "0x6D8d8fe14Ddcd7E5F8A69902Fcab7D05090834Fb";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const store = {
@@ -227,10 +227,18 @@ function renderDetail(id, c) {
     a.innerHTML = `<button id="a_go">Ask validators to judge</button> <small>Runs the LLM on every validator; this can take a minute or two.</small>`;
     $("a_go").onclick = () => send(`Judge case #${id}`, "judge", [id]).then(refresh);
   } else if (c.status === "JUDGED") {
-    a.innerHTML = `
-      <div class="row"><button id="a_fin">Accept verdict (finalize)</button></div>
-      ${isParty && !c.appeals ? `<label>Appeal with new evidence (one appeal only, max 500)</label><textarea id="a_text" maxlength="500"></textarea><div class="row" style="margin-top:10px"><button class="ghost" id="a_app">Appeal</button></div>` : `<p class="mute">${c.appeals ? "Appeal already used." : "Only the two parties can appeal."}</p>`}`;
-    $("a_fin").onclick = () => send(`Finalize case #${id}`, "finalize", [id]).then(refresh);
+    const accepted = (c.accepted || []).map((x) => String(x).toLowerCase());
+    const iAccepted = accepted.includes(me);
+    const needed = c.verdict === "SIDE_A" ? [String(c.respondent).toLowerCase()]
+      : c.verdict === "SIDE_B" ? [String(c.claimant).toLowerCase()]
+      : [String(c.claimant).toLowerCase(), String(c.respondent).toLowerCase()];
+    const waiting = needed.filter((x) => !accepted.includes(x));
+    const status = `<p class="mute"><small>The case closes when ${c.verdict === "SPLIT" ? "both parties accept" : "the losing side accepts"}. ${waiting.length ? "Still waiting for " + waiting.length + " acceptance(s); until then an appeal is still possible." : ""}</small></p>`;
+    a.innerHTML = status + (isParty ? `
+      <div class="row"><button id="a_fin" ${iAccepted ? "disabled" : ""}>${iAccepted ? "You accepted this verdict" : "Accept verdict (give up my appeal)"}</button></div>
+      ${!c.appeals ? `<label>Appeal with new evidence (one appeal only, max 500)</label><textarea id="a_text" maxlength="500"></textarea><div class="row" style="margin-top:10px"><button class="ghost" id="a_app">Appeal</button></div>` : `<p class="mute">Appeal already used.</p>`}`
+      : `<p class="mute">Only the claimant or respondent can accept the verdict or appeal. Switch "Acting as" to one of the parties.</p>`);
+    if ($("a_fin")) $("a_fin").onclick = () => send(`Accept verdict for case #${id}`, "finalize", [id]).then(refresh);
     if ($("a_app")) $("a_app").onclick = () => send(`Appeal case #${id}`, "appeal", [id, $("a_text").value]).then(refresh);
   } else {
     a.innerHTML = `<p class="mute">This case is final. The win/loss record has been updated.</p>`;
@@ -242,8 +250,8 @@ function bind() {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
     for (const t of ["cases", "new", "record"]) $("tab-" + t).hidden = t !== b.dataset.tab;
   });
-  $("contract").value = store.get("dc_contract_v3") || DEFAULT_CONTRACT;
-  $("contract").onchange = () => { store.set("dc_contract_v3", addr()); selected = null; refresh(); };
+  $("contract").value = store.get("dc_contract_v4") || DEFAULT_CONTRACT;
+  $("contract").onchange = () => { store.set("dc_contract_v4", addr()); selected = null; refresh(); };
   $("who").onchange = () => { current = $("who").value; makeClient(); refresh(); };
   $("reload").onclick = refresh;
   $("useB").onclick = () => { $("f_resp").value = accounts.B.address; };
