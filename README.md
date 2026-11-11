@@ -10,6 +10,8 @@ Justice is slow, expensive and wrong. AI agents will soon make millions of deals
 - **Tests:** [`tests/test_dispute_court.py`](./tests/test_dispute_court.py) in this repository
 - Also published with its own history at https://github.com/Obitotobi1/dispute-judge
 
+Note: the earlier deployment 0x8587f4fFa73A55bcb679f913aD478B1AfC724Ec1 is retired. The current contract is 0x6D8d8fe14Ddcd7E5F8A69902Fcab7D05090834Fb.
+
 ## What the app does
 
 1. **Open a case.** The claimant writes a title, a claim and an optional rubric, and names a respondent.
