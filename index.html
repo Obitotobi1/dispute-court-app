@@ -159,22 +159,84 @@ function logTx(id, html, cls = "") {
   el.innerHTML = html;
 }
 
-// Full lifecycle: sign -> submitted -> consensus (ACCEPTED) -> FINALIZED, with refresh.
-async function send(label, functionName, args) {
+
+// ---- Verification helpers: every write is checked by reading the record back ----
+const normTxt = (x) => String(x || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+const probeOne = (fn, args) => async () => await readJson(fn, args);
+const probeCreate = (listFn, match) => async () => {
+  const list = await readJson(listFn, [accounts[current].address]);
+  return { n: list.length, stored: list.some(match) };
+};
+const probeCases = (title) => async () => {
+  let n = 0, last = "";
+  for (let i = 1; i <= 40; i++) { try { const c = await readJson("get_case", [i]); n = i; last = c.title; } catch { break; } }
+  return { n, last };
+};
+
+// ---- Outcome classification: success is a WHITELIST. Anything else is shown under its real name. ----
+const OK_STATUS = ["ACCEPTED", "FINALIZED"];
+const BAD_RESULT = /DISAGREE|TIMEOUT|NO_MAJORITY|VIOLATION|UNDETERMINED|CANCEL|REJECT|ERROR|FAIL|REVERT|ROLLBACK/i;
+const up = (x) => (typeof x === "string" ? x.toUpperCase() : "");
+
+// Returns { ok, label, detail }. ok is true ONLY when the network reports an accepted/finalized
+// status, no failure signal, and the on-chain record really changed.
+function classifyOutcome(rcpt, changed) {
+  const status = up(rcpt?.statusName) || up(rcpt?.status_name);
+  const results = [rcpt?.resultName, rcpt?.result_name, rcpt?.txExecutionResultName, rcpt?.data?.execution_result].map(up).filter(Boolean);
+  const bad = results.find((x) => BAD_RESULT.test(x));
+  if (status && !OK_STATUS.includes(status)) {
+    const names = { UNDETERMINED: "Undetermined: validators could not reach a decision", CANCELED: "Canceled", LEADER_TIMEOUT: "Timeout: the leader did not answer in time", VALIDATORS_TIMEOUT: "Timeout: validators did not answer in time" };
+    return { ok: false, label: names[status] || ("Not accepted: status " + status), detail: "No result was stored. The record on-chain is unchanged." };
+  }
+  if (bad) {
+    const names = { DISAGREE: "Validators disagreed", MAJORITY_DISAGREE: "Validators disagreed", NO_MAJORITY: "No majority among validators" };
+    const k = Object.keys(names).find((n) => bad.includes(n));
+    return { ok: false, label: k ? names[k] : ("Not successful: " + bad), detail: "No result was stored. The record on-chain is unchanged." };
+  }
+  if (changed === false) return { ok: false, label: "Ran, but no change was stored", detail: "The record is identical before and after. Validators may not have agreed, or the page could not be read. Try again." };
+  if (changed === null) return { ok: false, label: "Outcome could not be verified", detail: "The network did not confirm an accepted result and the record could not be read back. Check the transaction in the Explorer before relying on it." };
+  if (!status) return { ok: false, label: "Not confirmed: the network reported no status", detail: "A receipt with no ACCEPTED or FINALIZED status is never treated as a success, even if the record seems to have changed. Check the transaction in the Explorer before relying on it." };
+  return { ok: true, label: status === "FINALIZED" ? "Finalized" : "Accepted by validator consensus", detail: "" };
+}
+
+// Stages shown as separate lines: Submitted, Outcome (from the classification), Finality.
+async function send(label, functionName, args, note, probe) {
   const id = Date.now() + Math.random().toString(16).slice(2, 6);
+  const head = `<b>${esc(label)}</b><br>`;
+  const line = (ok, text) => `<div>${ok === true ? "<span style='color:var(--ok)'>✔</span>" : ok === false ? "<span class='err'>✖</span>" : "<span class='mute'>…</span>"} ${text}</div>`;
+  const read = async () => { if (!probe) return undefined; try { return JSON.stringify(await probe()); } catch { return null; } };
   try {
-    logTx(id, `<b>${esc(label)}</b><br>1/3 Signing and submitting…`);
+    const before = await read();
+    logTx(id, head + line(null, "Signing and submitting…"));
     const hash = await client.writeContract({ address: addr(), functionName, args, value: 0n });
-    const base = `<b>${esc(label)}</b><br><span class="mono">${esc(hash)}</span><br>`;
-    logTx(id, base + "2/3 Submitted. Waiting for validators to reach consensus…");
-    await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 120, interval: 3000 });
-    logTx(id, base + "3/3 <b style='color:var(--ok)'>Accepted by consensus.</b> Waiting for finality…");
+    const h = `<span class="mono">${esc(hash)}</span>`;
+    logTx(id, head + h + line(true, "Submitted") + line(null, note || "Waiting for validators to reach consensus…"));
+    let rcpt;
+    try {
+      rcpt = await client.waitForTransactionReceipt({ hash, status: "ACCEPTED", retries: 120, interval: 3000 });
+    } catch (e) {
+      logTx(id, head + h + line(true, "Submitted") + line(false, "<b>Timed out waiting for the network.</b> Nothing is confirmed. The transaction may still complete: reload and check, or look it up in the Explorer.") , "err");
+      return false;
+    }
+    const after = await read();
+    const changed = probe ? (before === null || after === null ? null : before !== after) : null;
+    const out = classifyOutcome(rcpt, changed);
+    logTx(id, head + h + line(true, "Submitted") + line(out.ok, `<b>${esc(out.label)}</b>`) + (out.detail ? `<div class="mute"><small>${esc(out.detail)}</small></div>` : "") + (out.ok ? line(null, "Waiting for finality (it can still be appealed until then)…") : ""), out.ok ? "" : "err");
     await refresh();
+    if (!out.ok) return false;
     client.waitForTransactionReceipt({ hash, status: "FINALIZED", retries: 200, interval: 5000 })
-      .then(() => logTx(id, base + "<b style='color:var(--ok)'>Finalized.</b>"))
-      .catch(() => logTx(id, base + "Accepted. Finality is still pending (this can take a while on testnets)."));
+      .then(async (fin) => {
+        const f = classifyOutcome(fin, changed);
+        const finalStatus = up(fin?.statusName) || up(fin?.status_name);
+        const reallyFinal = finalStatus === "FINALIZED";
+        logTx(id, head + h + line(true, "Submitted") + line(f.ok, `<b>${esc(f.ok ? out.label : f.label)}</b>`) + (reallyFinal && f.ok ? line(true, "<b>Finalized</b>: this result is now permanent.") : line(f.ok ? null : false, f.ok ? "Finality not confirmed by the network yet." : esc(f.detail || "The final result is not a success."))), f.ok ? "" : "err");
+        refresh();
+      })
+      .catch(() => logTx(id, head + h + line(true, "Submitted") + line(out.ok, `<b>${esc(out.label)}</b>`) + line(null, "Finality is still pending. Check again later.")));
+    return true;
   } catch (e) {
-    logTx(id, `<b>${esc(label)}</b><br><span class="err">Failed: ${esc(e?.shortMessage || e?.message || e)}</span>`, "err");
+    logTx(id, head + `<span class="err">Failed before it reached the chain: ${esc(e?.shortMessage || e?.message || e)}</span>`, "err");
+    return false;
   }
 }
 
@@ -222,10 +284,10 @@ function renderDetail(id, c) {
     a.innerHTML = isResp
       ? `<label>Your response (Side B, max 500)</label><textarea id="a_text" maxlength="500"></textarea><div class="row" style="margin-top:10px"><button id="a_go">Submit response</button></div>`
       : `<p class="mute">Only the named respondent can respond. Switch "Acting as" to the respondent account.</p>`;
-    if (isResp) $("a_go").onclick = () => send(`Respond to case #${id}`, "respond", [id, $("a_text").value]).then(refresh);
+    if (isResp) $("a_go").onclick = () => send(`Respond to case #${id}`, "respond", [id, $("a_text").value], "Recording the response on-chain…", probeOne("get_case", [id])).then(refresh);
   } else if (c.status === "RESPONDED") {
     a.innerHTML = `<button id="a_go">Ask validators to judge</button> <small>Runs the LLM on every validator; this can take a minute or two.</small>`;
-    $("a_go").onclick = () => send(`Judge case #${id}`, "judge", [id]).then(refresh);
+    $("a_go").onclick = () => send(`Judge case #${id}`, "judge", [id], "Validators are reading both sides and agreeing on a verdict. This can take a few minutes.", probeOne("get_case", [id])).then(refresh);
   } else if (c.status === "JUDGED") {
     const accepted = (c.accepted || []).map((x) => String(x).toLowerCase());
     const iAccepted = accepted.includes(me);
@@ -238,8 +300,8 @@ function renderDetail(id, c) {
       <div class="row"><button id="a_fin" ${iAccepted ? "disabled" : ""}>${iAccepted ? "You accepted this verdict" : "Accept verdict (give up my appeal)"}</button></div>
       ${!c.appeals ? `<label>Appeal with new evidence (one appeal only, max 500)</label><textarea id="a_text" maxlength="500"></textarea><div class="row" style="margin-top:10px"><button class="ghost" id="a_app">Appeal</button></div>` : `<p class="mute">Appeal already used.</p>`}`
       : `<p class="mute">Only the claimant or respondent can accept the verdict or appeal. Switch "Acting as" to one of the parties.</p>`);
-    if ($("a_fin")) $("a_fin").onclick = () => send(`Accept verdict for case #${id}`, "finalize", [id]).then(refresh);
-    if ($("a_app")) $("a_app").onclick = () => send(`Appeal case #${id}`, "appeal", [id, $("a_text").value]).then(refresh);
+    if ($("a_fin")) $("a_fin").onclick = () => send(`Accept verdict for case #${id}`, "finalize", [id], "Recording the final verdict on-chain…", probeOne("get_case", [id])).then(refresh);
+    if ($("a_app")) $("a_app").onclick = () => send(`Appeal case #${id}`, "appeal", [id, $("a_text").value], "Validators are reviewing the appeal. This can take a few minutes.", probeOne("get_case", [id])).then(refresh);
   } else {
     a.innerHTML = `<p class="mute">This case is final. The win/loss record has been updated.</p>`;
   }
@@ -259,7 +321,7 @@ function bind() {
   $("openBtn").onclick = async () => {
     const t = $("f_title").value.trim(), c = $("f_claim").value.trim(), r = $("f_resp").value.trim();
     if (!t || !c || !/^0x[0-9a-fA-F]{40}$/.test(r)) { alert("Fill in a title, a claim and a valid respondent address."); return; }
-    await send("Open case", "open_case", [t, c, r, $("f_rubric").value.trim()]);
+    await send("Open case", "open_case", [t, c, r, $("f_rubric").value.trim()], "Recording the case on-chain, then reading it back to confirm it was stored…", probeCases(t));
     document.querySelector('[data-tab="cases"]').click();
   };
   $("r_btn").onclick = async () => {
