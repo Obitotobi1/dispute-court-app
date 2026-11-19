@@ -118,7 +118,7 @@ small{color:var(--mute)}
 </div>
 
 <script type="module">
-const DEFAULT_CONTRACT = "0x6D8d8fe14Ddcd7E5F8A69902Fcab7D05090834Fb";
+const DEFAULT_CONTRACT = "0x06A098e54230bA220C75a8cA7B9B3361c25102aF";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const store = {
@@ -262,6 +262,15 @@ async function refresh() {
   if (selected) { const hit = found.find(([i]) => i === selected); if (hit) renderDetail(hit[0], hit[1]); }
 }
 
+function evidenceHtml(c) {
+  const ev = c.evidence || {};
+  const row = (side, label, quote) => ev[side]
+    ? `<div class="claim"><small>${label} evidence page</small><div class="mono"><a href="${esc(ev[side])}" target="_blank" rel="noopener noreferrer">${esc(ev[side])}</a></div>${quote ? `<small>Quote validators found on the page:</small><div>“${esc(quote)}”</div>` : (c.verdict ? `<small class="mute">No verified quote from this page was used in the verdict.</small>` : "")}</div>`
+    : "";
+  const html = row("A", "Side A", c.quote_a) + row("B", "Side B", c.quote_b);
+  return html ? `<label>Evidence pages</label>${html}` : "";
+}
+
 function renderDetail(id, c) {
   const me = accounts[current].address.toLowerCase();
   const isResp = me === String(c.respondent).toLowerCase();
@@ -276,10 +285,26 @@ function renderDetail(id, c) {
     <small>Rubric</small><div>${esc(c.rubric)}</div>
     <label>Side A claim</label><div class="claim">${esc(c.claim_a)}</div>
     <label>Side B claim</label><div class="claim">${c.claim_b ? esc(c.claim_b) : "<span class='mute'>Waiting for the respondent.</span>"}</div>
+    ${evidenceHtml(c)}
     ${c.appeal_evidence ? `<label>Appeal evidence</label><div class="claim">${esc(c.appeal_evidence)}</div>` : ""}
     ${c.verdict ? `<label>Verdict</label><div class="verdict">${esc(c.verdict)} <small>confidence ${esc(c.confidence)}/5${c.appeals ? " · after appeal" : ""}</small></div><div>${esc(c.reason)}</div>` : ""}
     <div id="actions" style="margin-top:16px"></div>`;
   const a = $("actions");
+  if ((c.status === "OPEN" || c.status === "RESPONDED") && isParty) {
+    const mine = me === String(c.claimant).toLowerCase() ? "A" : "B";
+    const box = document.createElement("div");
+    box.style.marginBottom = "16px";
+    box.innerHTML = `<label>Evidence page for your side (public https link, optional)</label>
+      <input id="ev_url" spellcheck="false" placeholder="https://example.com/proof" value="${esc((c.evidence || {})[mine] || "")}">
+      <div class="row" style="margin-top:10px"><button class="ghost" id="ev_btn">${(c.evidence || {})[mine] ? "Replace evidence page" : "Attach evidence page"}</button></div>
+      <p class="mute"><small>Validators fetch this page themselves when the case is judged and may only quote words that really appear on it. Evidence is locked once judging starts.</small></p>`;
+    a.before(box);
+    $("ev_btn").onclick = () => {
+      const u = $("ev_url").value.trim();
+      if (!u.startsWith("https://")) { alert("Enter a public link that starts with https://"); return; }
+      send(`Attach evidence to case #${id}`, "set_evidence", [id, u], "Recording the evidence link on-chain…", probeOne("get_case", [id])).then(refresh);
+    };
+  }
   if (c.status === "OPEN") {
     a.innerHTML = isResp
       ? `<label>Your response (Side B, max 500)</label><textarea id="a_text" maxlength="500"></textarea><div class="row" style="margin-top:10px"><button id="a_go">Submit response</button></div>`
@@ -312,8 +337,8 @@ function bind() {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
     for (const t of ["cases", "new", "record"]) $("tab-" + t).hidden = t !== b.dataset.tab;
   });
-  $("contract").value = store.get("dc_contract_v4") || DEFAULT_CONTRACT;
-  $("contract").onchange = () => { store.set("dc_contract_v4", addr()); selected = null; refresh(); };
+  $("contract").value = store.get("dc_contract_v5") || DEFAULT_CONTRACT;
+  $("contract").onchange = () => { store.set("dc_contract_v5", addr()); selected = null; refresh(); };
   $("who").onchange = () => { current = $("who").value; makeClient(); refresh(); };
   $("reload").onclick = refresh;
   $("useB").onclick = () => { $("f_resp").value = accounts.B.address; };
