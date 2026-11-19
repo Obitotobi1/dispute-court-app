@@ -5,12 +5,11 @@ A web app for **DisputeCourt**, a GenLayer Intelligent Contract that resolves tw
 Justice is slow, expensive and wrong. AI agents will soon make millions of deals that no court can keep up with. DisputeCourt gives them (and people) a cheap, neutral way to settle a disagreement and build a public track record.
 
 - **Live app:** https://obitotobi1.github.io/dispute-court-app/
-- **Contract:** `0x6D8d8fe14Ddcd7E5F8A69902Fcab7D05090834Fb` (GenLayer Studio)
-- **Contract source:** [`dispute_court.py`](./dispute_court.py) in this repository
-- **Tests:** [`tests/test_dispute_court.py`](./tests/test_dispute_court.py) in this repository
+- **Contract v1.1 (current, used by the live app):** `0x06A098e54230bA220C75a8cA7B9B3361c25102aF` (GenLayer Studio)
+- **Contract v1.1 source:** [`dispute_court_v11.py`](./dispute_court_v11.py) in this repository
+- **Tests (20):** [`tests/test_dispute_court_v11.py`](./tests/test_dispute_court_v11.py) in this repository
+- **v1.0 contract (previous, accepted version):** `0x6D8d8fe14Ddcd7E5F8A69902Fcab7D05090834Fb`, source in [`dispute-judge`](https://github.com/Obitotobi1/dispute-judge)
 - Also published with its own history at https://github.com/Obitotobi1/dispute-judge
-
-Note: the earlier deployment 0x8587f4fFa73A55bcb679f913aD478B1AfC724Ec1 is retired. The current contract is 0x6D8d8fe14Ddcd7E5F8A69902Fcab7D05090834Fb.
 
 ## What the app does
 
@@ -22,6 +21,25 @@ Note: the earlier deployment 0x8587f4fFa73A55bcb679f913aD478B1AfC724Ec1 is retir
 
 Every write shows the full transaction lifecycle: signed, submitted, accepted by consensus, finalized.
 
+## What changed in v1.1
+
+| Area | v1.0 | v1.1 |
+|---|---|---|
+| Evidence | Text only, written by the parties | Each party can attach one public https page with `set_evidence(case_id, url)`, before judgement |
+| Judging | Validators read the two claims | Validators also **fetch both pages themselves** (`gl.nondet.web.render`) and weigh them as untrusted evidence |
+| Proof in the verdict | Free-text reason | `quote_a` and `quote_b`: a quote is stored only if it appears **word for word** on that side's page (checked in contract code), otherwise it is dropped |
+| Safety | Claims fenced in tags | Page text is fenced too; evidence URLs must be public https (no localhost, private IPs, credentials, IPv6); unreachable pages never break judging |
+| Contract | `0x6D8d8f…34Fb` | New deployment `0x06A098…02aF` |
+| App | Claims, verdicts, appeals | Evidence form for the parties, evidence links and verified quotes in the case view |
+| Tests | 11 | 20 (9 new for evidence, quotes, URL safety, fencing, appeals) |
+
+Live test on the v1.1 contract (Studio):
+
+- **Case 1**: evidence page unrelated to the dispute. Validators fetched it and ruled `SPLIT` (confidence 1), and no quote was stored.
+- **Case 2**: evidence page supports Side A. Verdict `SIDE_A` (confidence 5), and `quote_a` holds words found on the page.
+
+Comparison with the previous accepted version: https://github.com/Obitotobi1/dispute-court-app/compare/1714bef...a5f1bc8
+
 ## Contract methods used by the app
 
 | App action | Contract method | Who can call it |
@@ -29,6 +47,7 @@ Every write shows the full transaction lifecycle: signed, submitted, accepted by
 | Open a case | `open_case(title, claim_a, respondent, rubric)` | anyone (becomes claimant) |
 | Respond | `respond(case_id, claim_b)` | the named respondent |
 | Ask validators to judge | `judge(case_id)` | anyone, on a `RESPONDED` case |
+| Attach evidence page | `set_evidence(case_id, url)` | claimant or respondent, before judgement |
 | Appeal | `appeal(case_id, new_evidence)` | claimant or respondent, once |
 | Accept verdict | `finalize(case_id)` | claimant or respondent only |
 | Case list and detail | `get_case(case_id)` | read only |
